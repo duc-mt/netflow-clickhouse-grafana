@@ -1,0 +1,135 @@
+# Kiểm thử đơn vị cho fortigate_parse. Chạy:
+#   vector test vector/vector.yaml vector/vendors/fortigate.yaml vector/tests/fortigate.test.yaml
+# (cần biến môi trường CLICKHOUSE_USER, CLICKHOUSE_PASSWORD; xem tests/run_vector_tests.sh)
+tests:
+  - name: fortigate - log close co tz duoc parse day du
+    inputs:
+      - insert_at: fortigate_parse
+        type: log
+        log_fields:
+          message: '<189>date=2026-10-23 time=10:15:00 devname="FGT-HO" devid="FG100FTK20000000" eventtime=1792725300123456789 tz="+0700" logid="0000000013" type="traffic" subtype="forward" level="notice" vd="root" srcip=10.1.1.10 srcport=51234 srcintf="lan" srcintfrole="lan" dstip=8.8.8.8 dstport=443 dstintf="wan1" dstintfrole="wan" srccountry="Reserved" dstcountry="United States" sessionid=123456 proto=6 action="close" policyid=5 policytype="policy" poluuid="abcd-1234" policyname="LAN-to-WAN" service="HTTPS" trandisp="snat" transip=203.0.113.5 transport=51234 appid=41540 app="SSL" appcat="Network.Service" apprisk="low" applist="default" duration=12 sentbyte=1234 rcvdbyte=5678 sentpkt=10 rcvdpkt=12 user="DOM\alice"'
+    outputs:
+      - extract_from: fortigate_parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.src, "10.1.1.10")
+              assert_eq!(.dst, "8.8.8.8")
+              assert_eq!(.dport, 443)
+              assert_eq!(.bytes_sent, 1234)
+              assert_eq!(.bytes_received, 5678)
+              assert_eq!(.elapsed, 12)
+              assert_eq!(.app, "SSL")
+              assert_eq!(.category, "Network.Service")
+              assert_eq!(.rule, "LAN-to-WAN")
+              assert_eq!(.from_zone, "lan")
+              assert_eq!(.to_zone, "wan1")
+              assert_eq!(.dst_country, "United States")
+              assert_eq!(.src_user, "DOM\\alice")
+              assert_eq!(.vendor, "fortigate")
+              assert_eq!(.device, "FGT-HO")
+              # 10:15:00 +0700 = 03:15:00 UTC = 1792725300
+              assert_eq!(format_timestamp!(.ts, format: "%s"), "1792725300")
+              assert!(!exists(.message))
+
+  - name: fortigate - timeout, khong co tz thi coi la gio Viet Nam, unauthuser va policyid
+    inputs:
+      - insert_at: fortigate_parse
+        type: log
+        log_fields:
+          message: 'date=2026-10-23 time=10:15:00 devname="FGT-HO" logid="0000000013" type="traffic" subtype="forward" srcip=192.168.1.20 dstip=1.1.1.1 dstport=53 srcintf="lan" dstintf="wan1" action="timeout" policyid=7 duration=60 sentbyte=100 rcvdbyte=200 unauthuser="bob"'
+    outputs:
+      - extract_from: fortigate_parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.src_user, "bob")
+              assert_eq!(.rule, "7")
+              assert_eq!(.app, "")
+              assert_eq!(format_timestamp!(.ts, format: "%s"), "1792725300")
+              assert_eq!(.bytes_sent, 100)
+
+  - name: fortigate - client-rst va server-rst duoc giu
+    inputs:
+      - insert_at: fortigate_parse
+        type: log
+        log_fields:
+          message: 'date=2026-10-23 time=10:15:00 type="traffic" subtype="forward" srcip=10.0.0.1 dstip=9.9.9.9 dstport=80 action="client-rst" sentbyte=1 rcvdbyte=2'
+      - insert_at: fortigate_parse
+        type: log
+        log_fields:
+          message: 'date=2026-10-23 time=10:15:01 type="traffic" subtype="forward" srcip=10.0.0.2 dstip=9.9.9.9 dstport=80 action="server-rst" sentbyte=3 rcvdbyte=4'
+    outputs:
+      - extract_from: fortigate_parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.dst, "9.9.9.9")
+
+  - name: fortigate - action start, deny, accept bi bo
+    inputs:
+      - insert_at: fortigate_parse
+        type: log
+        log_fields:
+          message: 'date=2026-10-23 time=10:15:00 type="traffic" subtype="forward" srcip=10.0.0.1 dstip=9.9.9.9 dstport=80 action="start" sentbyte=0 rcvdbyte=0'
+      - insert_at: fortigate_parse
+        type: log
+        log_fields:
+          message: 'date=2026-10-23 time=10:15:00 type="traffic" subtype="forward" srcip=10.0.0.1 dstip=9.9.9.9 dstport=80 action="deny" sentbyte=0 rcvdbyte=0'
+      - insert_at: fortigate_parse
+        type: log
+        log_fields:
+          message: 'date=2026-10-23 time=10:15:00 type="traffic" subtype="forward" srcip=10.0.0.1 dstip=9.9.9.9 dstport=80 action="accept" sentbyte=5 rcvdbyte=5'
+    no_outputs_from: [fortigate_parse]
+
+  - name: fortigate - subtype local va type event bi bo
+    inputs:
+      - insert_at: fortigate_parse
+        type: log
+        log_fields:
+          message: 'date=2026-10-23 time=10:15:00 type="traffic" subtype="local" srcip=10.0.0.1 dstip=10.0.0.254 dstport=443 action="close" sentbyte=5 rcvdbyte=5'
+      - insert_at: fortigate_parse
+        type: log
+        log_fields:
+          message: 'date=2026-10-23 time=10:15:00 logid="0100032001" type="event" subtype="system" level="information" action="login" msg="Admin login successful"'
+    no_outputs_from: [fortigate_parse]
+
+  - name: fortigate - message rac khong co key=value bi bo
+    inputs:
+      - insert_at: fortigate_parse
+        type: log
+        log_fields:
+          message: 'hello world not a fortigate log'
+    no_outputs_from: [fortigate_parse]
+
+  - name: fortigate - co header syslog RFC3164 phia truoc van parse duoc
+    inputs:
+      - insert_at: fortigate_parse
+        type: log
+        log_fields:
+          message: '<189>Oct 23 10:15:00 fgt-ho date=2026-10-23 time=10:15:00 devname="FGT-HO" type="traffic" subtype="forward" srcip=10.0.0.1 dstip=9.9.9.9 dstport=80 action="close" sentbyte=7 rcvdbyte=8 tz="+0700"'
+    outputs:
+      - extract_from: fortigate_parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.bytes_sent, 7)
+              assert_eq!(.bytes_received, 8)
+
+  - name: fortigate - ban tin ket thuc bang xuong dong (LF va CRLF) van parse duoc
+    inputs:
+      - insert_at: fortigate_parse
+        type: log
+        log_fields:
+          message: "<189>date=2026-10-23 time=10:15:00 type=\"traffic\" subtype=\"forward\" srcip=10.0.0.1 dstip=9.9.9.9 dstport=80 action=\"close\" sentbyte=11 rcvdbyte=12 tz=\"+0700\"\n"
+      - insert_at: fortigate_parse
+        type: log
+        log_fields:
+          message: "<189>date=2026-10-23 time=10:15:00 type=\"traffic\" subtype=\"forward\" srcip=10.0.0.2 dstip=9.9.9.9 dstport=80 action=\"close\" sentbyte=13 rcvdbyte=14 tz=\"+0700\"\r\n"
+    outputs:
+      - extract_from: fortigate_parse
+        conditions:
+          - type: vrl
+            source: |
+              assert!(.bytes_sent == 11 || .bytes_sent == 13)
+              assert!(.bytes_received == 12 || .bytes_received == 14)

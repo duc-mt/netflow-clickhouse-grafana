@@ -1,0 +1,786 @@
+{
+  "title": "Băng thông trong nước / quốc tế",
+  "uid": "panos-bandwidth",
+  "tags": [
+    "palo-alto",
+    "bandwidth"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "version": 2,
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Nguồn dữ liệu",
+        "type": "datasource",
+        "query": "grafana-clickhouse-datasource",
+        "current": {},
+        "hide": 0,
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false,
+        "options": [],
+        "regex": ""
+      },
+      {
+        "name": "client",
+        "label": "Lọc máy (IP, để trống = tất cả)",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "hide": 0,
+        "options": []
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Đang diễn ra (NetFlow, cập nhật mỗi phút)",
+      "collapsed": false,
+      "panels": [],
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Băng thông quốc tế / trong nước",
+      "description": "Từ NetFlow: phiên đang chạy được tính mỗi phút, nên lượt tải dài hiện dần.",
+      "interval": "1m",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "SELECT\n  $__timeInterval(ts) AS time,\n  sumIf(bytes, direction = 'Quốc tế')    * 8 / $__interval_s AS `Quốc tế`,\n  sumIf(bytes, direction = 'Trong nước') * 8 / $__interval_s AS `Trong nước`\nFROM panos.flows\nWHERE $__timeFilter(ts) AND ('${client}' = '' OR local_ip = '${client}')\nGROUP BY time\nORDER BY time"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bps",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Quốc tế"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Trong nước"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 2,
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Top 10 máy theo băng thông",
+      "description": "Mỗi đường là một máy trong mạng (IP nội bộ), tính cả quốc tế và trong nước.",
+      "interval": "1m",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "SELECT $__timeInterval(ts) AS time, local_ip AS client, sum(bytes) * 8 / $__interval_s AS bps\nFROM panos.flows\nWHERE $__timeFilter(ts) AND direction IN ('Quốc tế', 'Trong nước') AND ('${client}' = '' OR local_ip = '${client}')\n  AND local_ip IN (\n    SELECT local_ip FROM panos.flows\n    WHERE $__timeFilter(ts) AND direction IN ('Quốc tế', 'Trong nước') AND ('${client}' = '' OR local_ip = '${client}')\n    GROUP BY local_ip ORDER BY sum(bytes) DESC LIMIT 10)\nGROUP BY time, client\nORDER BY time"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bps",
+          "min": 0,
+          "displayName": "${__field.labels.client}",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 3,
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      }
+    },
+    {
+      "type": "table",
+      "title": "Máy đang dùng nhiều nhất (5 phút gần nhất)",
+      "description": "Tốc độ trung bình 5 phút gần nhất. Bấm tiêu đề cột để xếp lại.",
+      "timeFrom": "5m",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "WITH dateDiff('second', $__fromTime, $__toTime) AS dur\nSELECT\n  local_ip AS `Máy`,\n  anyIf(user, user != '') AS `Người dùng`,\n  sumIf(bytes, direction = 'Quốc tế')    * 8 / dur AS `Quốc tế`,\n  sumIf(bytes, direction = 'Trong nước') * 8 / dur AS `Trong nước`,\n  sum(bytes) * 8 / dur AS `Tổng`\nFROM panos.flows\nWHERE $__timeFilter(ts) AND direction IN ('Quốc tế', 'Trong nước') AND ('${client}' = '' OR local_ip = '${client}')\nGROUP BY `Máy`\nORDER BY `Tổng` DESC\nLIMIT 20"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bps",
+          "decimals": 1,
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Quốc tế"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "basic",
+                  "valueDisplayMode": "text"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Trong nước"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "basic",
+                  "valueDisplayMode": "text"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "id": 4,
+      "gridPos": {
+        "x": 0,
+        "y": 10,
+        "w": 12,
+        "h": 10
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      }
+    },
+    {
+      "type": "table",
+      "title": "Ứng dụng đang dùng nhiều nhất (5 phút gần nhất)",
+      "description": "Ứng dụng theo App-ID của Palo Alto.",
+      "timeFrom": "5m",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "WITH dateDiff('second', $__fromTime, $__toTime) AS dur\nSELECT\n  if(app = '', '(chưa rõ)', app) AS `Ứng dụng`,\n  sumIf(bytes, direction = 'Quốc tế')    * 8 / dur AS `Quốc tế`,\n  sumIf(bytes, direction = 'Trong nước') * 8 / dur AS `Trong nước`,\n  sum(bytes) * 8 / dur AS `Tổng`\nFROM panos.flows\nWHERE $__timeFilter(ts) AND direction IN ('Quốc tế', 'Trong nước') AND ('${client}' = '' OR local_ip = '${client}')\nGROUP BY `Ứng dụng`\nORDER BY `Tổng` DESC\nLIMIT 20"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bps",
+          "decimals": 1,
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Quốc tế"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "basic",
+                  "valueDisplayMode": "text"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Trong nước"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "basic",
+                  "valueDisplayMode": "text"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "id": 5,
+      "gridPos": {
+        "x": 12,
+        "y": 10,
+        "w": 12,
+        "h": 10
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      }
+    },
+    {
+      "type": "row",
+      "title": "Tổng hợp theo khoảng thời gian đã chọn (traffic log, tính khi phiên kết thúc)",
+      "collapsed": false,
+      "panels": [],
+      "id": 6,
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "piechart",
+      "title": "Tỷ lệ quốc tế / trong nước",
+      "description": "Tổng dung lượng (gửi + nhận) trong khoảng thời gian đang chọn.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "SELECT\n  sumIf(bytes_sent + bytes_received, direction = 'Quốc tế')    AS `Quốc tế`,\n  sumIf(bytes_sent + bytes_received, direction = 'Trong nước') AS `Trong nước`\nFROM panos.traffic\nWHERE $__timeFilter(ts) AND ('${client}' = '' OR src = '${client}')"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 1
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Quốc tế"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Trong nước"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "pieType": "donut",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "values": [
+            "value",
+            "percent"
+          ]
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "displayLabels": [
+          "percent"
+        ]
+      },
+      "id": 7,
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 8,
+        "h": 12
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      }
+    },
+    {
+      "type": "table",
+      "title": "Top 20 ứng dụng theo băng thông quốc tế",
+      "description": "Dung lượng mỗi ứng dụng theo hướng; cột cuối là tỷ lệ đi quốc tế.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "SELECT\n  app AS `Ứng dụng`,\n  sumIf(bytes_sent + bytes_received, direction = 'Quốc tế')    AS `Quốc tế`,\n  sumIf(bytes_sent + bytes_received, direction = 'Trong nước') AS `Trong nước`,\n  round(100 * `Quốc tế` / nullIf(`Quốc tế` + `Trong nước`, 0), 1) AS `% quốc tế`\nFROM panos.traffic\nWHERE $__timeFilter(ts) AND direction IN ('Quốc tế', 'Trong nước') AND ('${client}' = '' OR src = '${client}')\nGROUP BY `Ứng dụng`\nORDER BY `Quốc tế` DESC\nLIMIT 20"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 1,
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Ứng dụng"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 200
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "% quốc tế"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 100
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 50
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "id": 8,
+      "gridPos": {
+        "x": 8,
+        "y": 21,
+        "w": 16,
+        "h": 12
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Top 15 người dùng băng thông quốc tế",
+      "description": "Chỉ tính lưu lượng quốc tế. Tên lấy từ User-ID; không có thì hiện IP.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "SELECT if(src_user = '', src, src_user) AS `Người dùng`, sum(bytes_sent + bytes_received) AS `Quốc tế`\nFROM panos.traffic\nWHERE $__timeFilter(ts) AND direction = 'Quốc tế' AND ('${client}' = '' OR src = '${client}')\nGROUP BY `Người dùng`\nORDER BY `Quốc tế` DESC\nLIMIT 15"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 1,
+          "min": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "namePlacement": "left",
+        "reduceOptions": {
+          "values": true,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^Quốc tế$/"
+        }
+      },
+      "id": 9,
+      "gridPos": {
+        "x": 0,
+        "y": 33,
+        "w": 8,
+        "h": 13
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      }
+    },
+    {
+      "type": "netsage-sankey-panel",
+      "title": "Luồng ứng dụng → hướng đi",
+      "description": "Độ dày mỗi dải là dung lượng.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "SELECT app AS source, direction AS target, sum(bytes_sent + bytes_received) AS value\nFROM panos.traffic\nWHERE $__timeFilter(ts) AND direction IN ('Quốc tế', 'Trong nước') AND ('${client}' = '' OR src = '${client}')\nGROUP BY source, target\nORDER BY value DESC\nLIMIT 40"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "id": 10,
+      "gridPos": {
+        "x": 8,
+        "y": 33,
+        "w": 8,
+        "h": 13
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      }
+    },
+    {
+      "type": "barchart",
+      "title": "Dung lượng theo ngày (30 ngày gần nhất)",
+      "description": "Luôn hiện 30 ngày của toàn mạng, không theo khoảng thời gian chung và ô Lọc máy.",
+      "timeFrom": "30d",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "SELECT\n  toDate(hour) AS `Ngày`,\n  sumIf(bytes_sent + bytes_received, direction = 'Quốc tế')    AS `Quốc tế`,\n  sumIf(bytes_sent + bytes_received, direction = 'Trong nước') AS `Trong nước`\nFROM panos.traffic_hourly\nWHERE $__timeFilter(hour)\nGROUP BY `Ngày`\nORDER BY `Ngày`"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 1,
+          "custom": {
+            "fillOpacity": 85,
+            "lineWidth": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Quốc tế"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Trong nước"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "xField": "Ngày",
+        "stacking": "normal",
+        "orientation": "vertical",
+        "xTickLabelRotation": -45,
+        "showValue": "never",
+        "barWidth": 0.8,
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 11,
+      "gridPos": {
+        "x": 16,
+        "y": 33,
+        "w": 8,
+        "h": 13
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      }
+    }
+  ]
+}

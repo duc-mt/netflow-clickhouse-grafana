@@ -1,0 +1,1 @@
+{"rtime":"$receive_time","src":"$src","dst":"$dst","src_user":"$srcuser","app":"$app","category":"$category","rule":"$rule","from_zone":"$from","to_zone":"$to","dst_country":"$dstloc","dport":$dport,"bytes_sent":$bytes_sent,"bytes_received":$bytes_received,"elapsed":$elapsed,"subtype":"$subtype"}

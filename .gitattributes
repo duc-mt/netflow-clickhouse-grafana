@@ -1,0 +1,9 @@
+# Giữ LF cho mọi file chạy trên Linux (tránh lỗi "bad interpreter" khi clone trên Windows)
+* text=auto
+*.sh   text eol=lf
+*.py   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.sql  text eol=lf
+*.json text eol=lf
+*.md   text eol=lf

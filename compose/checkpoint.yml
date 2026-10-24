@@ -1,0 +1,7 @@
+# Check Point (BETA): Log Exporter (Syslog) tới UDP 5516.
+services:
+  vector:
+    ports:
+      - "5516:5516/udp"
+    volumes:
+      - ./vector/vendors/checkpoint.yaml:/etc/vector/vendors/checkpoint.yaml:ro

@@ -1,0 +1,102 @@
+# Kiểm thử đơn vị cho checkpoint_parse (BETA).
+# CẢNH BÁO: các bản tin dưới đây là log TỔNG HỢP dựng theo tài liệu Log Exporter, KHÔNG phải log Check Point thật.
+# Hãy thay/bổ sung bằng log thật (đã che IP) trước khi tin vào kết quả.
+tests:
+  - name: checkpoint [tong hop] - accept co sent/received bytes
+    inputs:
+      - insert_at: checkpoint_parse
+        type: log
+        log_fields:
+          message: '<134>1 2026-10-23T03:15:00Z gw1 CheckPoint 2112 - [action:"Accept"; flags:"411908"; ifdir:"inbound"; ifname:"eth1"; loguid:"{0x5e80a059,0x0,0x6401a8c0,0x3c7878a}"; origin:"192.168.1.1"; originsicname:"CN=gw1,O=mgmt..abc"; sequencenum:"3"; time:"1792725300"; version:"5"; dst:"8.8.8.8"; inzone:"Internal"; outzone:"External"; product:"VPN-1 & FireWall-1"; proto:"6"; s_port:"51234"; service:"443"; service_id:"https"; src:"10.1.1.10"; rule_name:"LAN to Internet"; src_user_name:"alice (DOM)"; appi_name:"Facebook"; app_category:"Social Networking"; sent_bytes:"1234"; received_bytes:"5678"; elapsed:"12"]'
+    outputs:
+      - extract_from: checkpoint_parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.src, "10.1.1.10")
+              assert_eq!(.dst, "8.8.8.8")
+              assert_eq!(.dport, 443)
+              assert_eq!(.bytes_sent, 1234)
+              assert_eq!(.bytes_received, 5678)
+              assert_eq!(.elapsed, 12)
+              assert_eq!(.app, "Facebook")
+              assert_eq!(.category, "Social Networking")
+              assert_eq!(.rule, "LAN to Internet")
+              assert_eq!(.src_user, "alice (DOM)")
+              assert_eq!(.from_zone, "Internal")
+              assert_eq!(.to_zone, "External")
+              assert_eq!(.device, "192.168.1.1")
+              assert_eq!(.vendor, "checkpoint")
+              assert_eq!(.loguid, "{0x5e80a059,0x0,0x6401a8c0,0x3c7878a}")
+              assert_eq!(format_timestamp!(.ts, format: "%s"), "1792725300")
+
+  - name: checkpoint [tong hop] - time dang mili-giay va fallback client_*_bytes
+    inputs:
+      - insert_at: checkpoint_parse
+        type: log
+        log_fields:
+          message: '<134>1 2026-10-23T03:15:00Z gw1 CheckPoint 2112 - [action:"Accept"; loguid:"{0xaaaa,0x0,0x1,0x2}"; origin:"192.168.1.1"; time:"1792725300123"; dst:"1.1.1.1"; src:"10.1.1.11"; service:"53"; client_outbound_bytes:"100"; client_inbound_bytes:"250"]'
+    outputs:
+      - extract_from: checkpoint_parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.bytes_sent, 100)
+              assert_eq!(.bytes_received, 250)
+              assert_eq!(format_timestamp!(.ts, format: "%s"), "1792725300")
+
+  - name: checkpoint [tong hop] - chi co tong bytes thi ghi vao bytes_sent
+    inputs:
+      - insert_at: checkpoint_parse
+        type: log
+        log_fields:
+          message: '<134>1 2026-10-23T03:15:00Z gw1 CheckPoint 2112 - [action:"Accept"; loguid:"{0xbbbb,0x0,0x1,0x2}"; time:"1792725300"; dst:"9.9.9.9"; src:"10.1.1.12"; service:"80"; bytes:"900"]'
+    outputs:
+      - extract_from: checkpoint_parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.bytes_sent, 900)
+              assert_eq!(.bytes_received, 0)
+
+  - name: checkpoint [tong hop] - thieu loguid thi tu sinh de khong bi gop nham
+    inputs:
+      - insert_at: checkpoint_parse
+        type: log
+        log_fields:
+          message: '<134>1 2026-10-23T03:15:00Z gw1 CheckPoint 2112 - [action:"Accept"; time:"1792725300"; dst:"9.9.9.9"; src:"10.1.1.12"; service:"80"; bytes:"1"]'
+    outputs:
+      - extract_from: checkpoint_parse
+        conditions:
+          - type: vrl
+            source: |
+              assert!(string!(.loguid) != "")
+
+  - name: checkpoint [tong hop] - Drop, Reject va log khong co byte bi bo
+    inputs:
+      - insert_at: checkpoint_parse
+        type: log
+        log_fields:
+          message: '<134>1 2026-10-23T03:15:00Z gw1 CheckPoint 2112 - [action:"Drop"; loguid:"{0x1,0x0,0x1,0x2}"; time:"1792725300"; dst:"9.9.9.9"; src:"10.1.1.12"; service:"80"; bytes:"10"]'
+      - insert_at: checkpoint_parse
+        type: log
+        log_fields:
+          message: '<134>1 2026-10-23T03:15:00Z gw1 CheckPoint 2112 - [action:"Accept"; loguid:"{0x2,0x0,0x1,0x2}"; time:"1792725300"; dst:"9.9.9.9"; src:"10.1.1.12"; service:"80"]'
+      - insert_at: checkpoint_parse
+        type: log
+        log_fields:
+          message: 'not a checkpoint log'
+    no_outputs_from: [checkpoint_parse]
+
+  - name: checkpoint [tong hop] - ban tin ket thuc bang xuong dong van parse duoc
+    inputs:
+      - insert_at: checkpoint_parse
+        type: log
+        log_fields:
+          message: "<134>1 2026-10-23T03:15:00Z gw1 CheckPoint 2112 - [action:\"Accept\"; loguid:\"{0xcccc,0x0,0x1,0x2}\"; time:\"1792725300\"; dst:\"9.9.9.9\"; src:\"10.1.1.12\"; service:\"80\"; bytes:\"42\"]\n"
+    outputs:
+      - extract_from: checkpoint_parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.bytes_sent, 42)

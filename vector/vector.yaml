@@ -1,0 +1,121 @@
+# Vector: nhan traffic log tu Palo Alto (syslog UDP 5514, noi dung JSON)
+# va ghi theo lo vao ClickHouse bang panos.traffic
+
+data_dir: /var/lib/vector
+
+sources:
+  panos_syslog:
+    type: socket
+    mode: udp
+    address: 0.0.0.0:5514
+
+  # NetFlow tu Palo Alto (UDP 2055): Vector chay GoFlow2 va doc JSON tu stdout
+  netflow:
+    type: exec
+    mode: streaming
+    command:
+      - /opt/goflow2/goflow2
+      - -listen=netflow://:2055
+      - -mapping=/opt/goflow2/mapping.yaml
+      - -format=json
+      - -addr=127.0.0.1:8080
+      - -templates.path=/templates
+    include_stderr: false
+    streaming:
+      respawn_on_exit: true
+      respawn_interval_secs: 5
+
+transforms:
+  panos_parse:
+    type: remap
+    inputs: [panos_syslog]
+    drop_on_error: true
+    drop_on_abort: true
+    reroute_dropped: false
+    source: |
+      # Bo phan header syslog, chi lay doan JSON do Palo Alto tao (Custom Log Format)
+      m, err = parse_regex(string!(.message), r'(?P<json>\{.*\})')
+      if err != null { abort }
+      . = object!(parse_json!(string!(m.json)))
+
+      # Chi giu log ket thuc phien (co so byte cuoi cung)
+      if .subtype != "end" { abort }
+
+      # Gio tren firewall la gio Viet Nam
+      .ts = parse_timestamp(string!(.rtime), format: "%Y/%m/%d %H:%M:%S", timezone: "Asia/Ho_Chi_Minh") ?? now()
+
+      .dport          = to_int(.dport) ?? 0
+      .bytes_sent     = to_int(.bytes_sent) ?? 0
+      .bytes_received = to_int(.bytes_received) ?? 0
+      .elapsed        = to_int(.elapsed) ?? 0
+      del(.rtime)
+      del(.subtype)
+
+  netflow_parse:
+    type: remap
+    inputs: [netflow]
+    drop_on_error: true
+    drop_on_abort: true
+    reroute_dropped: false
+    source: |
+      f = object!(parse_json!(string!(.message)))
+      . = {}
+      .ts       = to_int((to_float(f.time_received_ns) ?? 0.0) / 1000000000.0)
+      .exporter = to_string(f.sampler_address) ?? ""
+      .src      = to_string(f.src_addr) ?? ""
+      .dst      = to_string(f.dst_addr) ?? ""
+      .nat_src  = to_string(f.nat_src_addr) ?? ""
+      .nat_dst  = to_string(f.nat_dst_addr) ?? ""
+      .src_port = to_int(f.src_port) ?? 0
+      .dst_port = to_int(f.dst_port) ?? 0
+      .proto    = to_string(f.proto) ?? ""
+      .in_if    = to_int(f.in_if) ?? 0
+      .out_if   = to_int(f.out_if) ?? 0
+      .flow_id  = to_int(f.flow_id) ?? 0
+      .fw_event = to_int(f.fw_event) ?? 0
+      .bytes    = to_int(f.bytes) ?? 0
+      .packets  = to_int(f.packets) ?? 0
+      # App-ID / User-ID: GoFlow2 xuat dang hex, co dem ky tu NUL o cuoi
+      .app  = replace(decode_base16(to_string(f.app) ?? "") ?? "", r'\x00', "")
+      .user = replace(decode_base16(to_string(f.user) ?? "") ?? "", r'\x00', "")
+
+sinks:
+  clickhouse:
+    type: clickhouse
+    inputs: [panos_parse]
+    endpoint: http://clickhouse:8123
+    database: panos
+    table: traffic
+    skip_unknown_fields: true
+    auth:
+      strategy: basic
+      user: "${CLICKHOUSE_USER}"
+      password: "${CLICKHOUSE_PASSWORD}"
+    encoding:
+      timestamp_format: unix
+    batch:
+      max_events: 20000
+      timeout_secs: 5
+    buffer:
+      type: disk
+      max_size: 1073741824   # 1 GB dem tren dia neu ClickHouse tam ngung
+      when_full: drop_newest
+
+  clickhouse_flows:
+    type: clickhouse
+    inputs: [netflow_parse]
+    endpoint: http://clickhouse:8123
+    database: panos
+    table: flows
+    skip_unknown_fields: true
+    auth:
+      strategy: basic
+      user: "${CLICKHOUSE_USER}"
+      password: "${CLICKHOUSE_PASSWORD}"
+    batch:
+      max_events: 20000
+      timeout_secs: 5
+    buffer:
+      type: disk
+      max_size: 1073741824
+      when_full: drop_newest

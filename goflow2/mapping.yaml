@@ -1,0 +1,57 @@
+# GoFlow2: them cac truong rieng cua Palo Alto vao JSON (App-ID, User-ID, NAT, session id)
+# app/user xuat ra dang hex (co ky tu NUL), Vector giai ma lai.
+formatter:
+  fields:
+    - time_received_ns
+    - sampler_address
+    - bytes
+    - packets
+    - src_addr
+    - dst_addr
+    - proto
+    - src_port
+    - dst_port
+    - in_if
+    - out_if
+    - flow_id
+    - fw_event
+    - nat_src_addr
+    - nat_dst_addr
+    - app
+    - user
+  protobuf:
+    - name: flow_id
+      index: 1001
+      type: varint
+    - name: fw_event
+      index: 1002
+      type: varint
+    - name: nat_src_addr
+      index: 1003
+      type: bytes
+    - name: nat_dst_addr
+      index: 1004
+      type: bytes
+    - name: app
+      index: 1005
+      type: string
+    - name: user
+      index: 1006
+      type: string
+  render:
+    nat_src_addr: ip
+    nat_dst_addr: ip
+netflowv9:
+  mapping:
+    - field: 148     # flowId (session id)
+      destination: flow_id
+    - field: 233     # firewallEvent
+      destination: fw_event
+    - field: 225     # postNATSourceIPv4Address
+      destination: nat_src_addr
+    - field: 226     # postNATDestinationIPv4Address
+      destination: nat_dst_addr
+    - field: 56701   # App-ID (PAN-OS Field Types)
+      destination: app
+    - field: 56702   # User-ID (PAN-OS Field Types)
+      destination: user

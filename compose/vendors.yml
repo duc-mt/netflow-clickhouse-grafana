@@ -1,0 +1,9 @@
+# Bật nạp thêm cấu hình Vector của các hãng firewall khác (FortiGate, Check Point...).
+# Được deploy.sh tự thêm vào lệnh docker compose khi biến VENDORS trong .env không rỗng.
+#
+# Vector đọc vector/vector.yaml (giữ nguyên) + mọi file trong /etc/vector/vendors/*.yaml.
+# Mỗi hãng được bật có file compose/<hãng>.yml riêng để mount file cấu hình và mở đúng cổng UDP.
+services:
+  vector:
+    environment:
+      VECTOR_CONFIG: /etc/vector/vector.yaml,/etc/vector/vendors/*.yaml

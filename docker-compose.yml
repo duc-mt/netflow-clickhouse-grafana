@@ -1,0 +1,80 @@
+# Palo Alto -> Vector (+GoFlow2) -> ClickHouse -> Grafana
+#
+# Phiên bản được ghim ngay tại đây; có thể ghi đè bằng CLICKHOUSE_TAG / GRAFANA_TAG / VECTOR_TAG trong .env.
+# Khi nâng cấp tại chỗ, tag KHÔNG được thấp hơn phiên bản ClickHouse đang giữ dữ liệu (không hỗ trợ hạ phiên bản).
+name: netflow-clickhouse-grafana
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:${CLICKHOUSE_TAG:-26.8}
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      CLICKHOUSE_DB: panos
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:?Thiếu CLICKHOUSE_USER trong .env}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?Thiếu CLICKHOUSE_PASSWORD trong .env}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    volumes:
+      - ./clickhouse/data:/var/lib/clickhouse
+      - ./clickhouse/user_files:/var/lib/clickhouse/user_files
+      - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
+    # Healthy khi init script đã chạy xong (bảng panos.flows tồn tại).
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          [ "$$(clickhouse-client --user "$$CLICKHOUSE_USER"
+          --password "$$CLICKHOUSE_PASSWORD"
+          --query 'EXISTS TABLE panos.flows')" = "1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 40s
+    # Không publish cổng ClickHouse: Vector (8123) và Grafana (9000) nối qua mạng nội bộ Docker.
+
+  vector:
+    image: timberio/vector:${VECTOR_TAG:-0.56.0-debian}
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+    ports:
+      - "5514:5514/udp"      # Palo Alto gửi Syslog vào đây
+      - "2055:2055/udp"      # Palo Alto gửi NetFlow vào đây
+    volumes:
+      - ./vector/vector.yaml:/etc/vector/vector.yaml:ro
+      - ./vector/data:/var/lib/vector
+      - ./goflow2:/opt/goflow2:ro   # GoFlow2 (bộ giải mã NetFlow), Vector tự chạy
+
+  grafana:
+    image: grafana/grafana:${GRAFANA_TAG:-13.2.4}
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Thiếu GRAFANA_ADMIN_PASSWORD trong .env}
+      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource,netsage-sankey-panel
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana/data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro

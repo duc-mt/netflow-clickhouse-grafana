@@ -1,0 +1,7 @@
+# FortiGate: Syslog (Traffic Log) tới UDP 5515. NetFlow/IPFIX dùng chung cổng 2055 sẵn có, không cần file này.
+services:
+  vector:
+    ports:
+      - "5515:5515/udp"
+    volumes:
+      - ./vector/vendors/fortigate.yaml:/etc/vector/vendors/fortigate.yaml:ro

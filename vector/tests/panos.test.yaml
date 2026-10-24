@@ -1,0 +1,29 @@
+# Kiểm thử đơn vị cho panos_parse GỐC (không sửa vector.yaml; đây là hàng rào chống hồi quy khi thêm vendor).
+tests:
+  - name: panos - log end duoc parse dung
+    inputs:
+      - insert_at: panos_parse
+        type: log
+        log_fields:
+          message: '<14>2026/10/23 10:00:00 test panos: {"rtime":"2026/10/23 10:00:00","src":"10.99.99.99","dst":"8.8.8.8","src_user":"selftest","app":"ssl","category":"any","rule":"r1","from_zone":"lan","to_zone":"wan","dst_country":"US","dport":443,"bytes_sent":100,"bytes_received":200,"elapsed":1,"subtype":"end"}'
+    outputs:
+      - extract_from: panos_parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.src, "10.99.99.99")
+              assert_eq!(.dport, 443)
+              assert_eq!(.bytes_sent, 100)
+              assert_eq!(.bytes_received, 200)
+              assert!(!exists(.subtype))
+              assert!(!exists(.rtime))
+              # 10:00:00 gio Viet Nam = 03:00:00 UTC
+              assert_eq!(format_timestamp!(.ts, format: "%s"), "1792724400")
+
+  - name: panos - log subtype start bi bo
+    inputs:
+      - insert_at: panos_parse
+        type: log
+        log_fields:
+          message: '<14>x {"rtime":"2026/10/23 10:00:00","src":"1.1.1.1","dst":"2.2.2.2","subtype":"start"}'
+    no_outputs_from: [panos_parse]

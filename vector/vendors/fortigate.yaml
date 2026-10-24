@@ -1,0 +1,95 @@
+# FortiGate (FortiOS) - Traffic Log qua Syslog (UDP 5515) -> panos.traffic
+#
+# Định dạng: syslog "default" của FortiOS, dạng key=value, ví dụ:
+#   <189>date=2026-10-23 time=10:15:00 devname="FGT-HO" ... type="traffic" subtype="forward"
+#   ... action="close" ... duration=12 sentbyte=1234 rcvdbyte=5678 ...
+# Chỉ giữ log kết thúc phiên của lưu lượng đi qua firewall (type=traffic, subtype=forward,
+# action = close / timeout / client-rst / server-rst), giống cách panos_parse chỉ giữ subtype=end.
+#
+# File này dùng CHUNG database/bảng với Palo Alto (panos.traffic) và KHÔNG sửa panos_parse.
+# Các trường vendor/device là tùy chọn: chỉ được ghi khi đã chạy
+# clickhouse/migrations/04_add_vendor_columns.sql (sink có skip_unknown_fields nên không lỗi nếu chưa chạy).
+
+sources:
+  fortigate_syslog:
+    type: socket
+    mode: udp
+    address: 0.0.0.0:5515
+
+transforms:
+  fortigate_parse:
+    type: remap
+    inputs: [fortigate_syslog]
+    drop_on_error: true
+    drop_on_abort: true
+    reroute_dropped: false
+    source: |
+      # Bỏ header syslog (nếu có), chỉ lấy phần key=value bắt đầu từ date=... time=...
+      # Lấy đến hết dòng ([^\r\n]*), không neo `$`: bản tin có thể kết thúc bằng \n hoặc \r\n
+      # (rsyslog/logger/nc thêm ký tự xuống dòng) mà vẫn phải parse được.
+      m, err = parse_regex(string!(.message), r'(?P<kv>date=\d{4}-\d{2}-\d{2} time=\d{2}:\d{2}:\d{2}[^\r\n]*)')
+      if err != null { abort }
+      f = parse_key_value!(m.kv, key_value_delimiter: "=", field_delimiter: " ", whitespace: "lenient")
+
+      # Chỉ giữ log kết thúc phiên của lưu lượng forward
+      if f.type != "traffic" || f.subtype != "forward" { abort }
+      action = string(f.action) ?? ""
+      if !includes(["close", "timeout", "client-rst", "server-rst"], action) { abort }
+
+      # Thời gian: ưu tiên múi giờ FortiOS ghi trong log (tz="+0700"), nếu thiếu thì coi là giờ Việt Nam
+      ts_text = string!(f.date) + " " + string!(f.time)
+      tz = string(f.tz) ?? ""
+      ts = if tz != "" {
+        parse_timestamp(ts_text + " " + tz, format: "%Y-%m-%d %H:%M:%S %z") ?? now()
+      } else {
+        parse_timestamp(ts_text, format: "%Y-%m-%d %H:%M:%S", timezone: "Asia/Ho_Chi_Minh") ?? now()
+      }
+
+      # Người dùng: user (đã xác thực) hoặc unauthuser (nhận diện không xác thực)
+      user = string(f.user) ?? ""
+      if user == "" { user = string(f.unauthuser) ?? "" }
+
+      # Tên rule: policyname nếu có, không thì policyid
+      rule = string(f.policyname) ?? ""
+      if rule == "" { rule = to_string(f.policyid) ?? "" }
+
+      . = {
+        "ts": ts,
+        "src": string(f.srcip) ?? "",
+        "dst": string(f.dstip) ?? "",
+        "src_user": user,
+        "app": string(f.app) ?? "",
+        "category": string(f.appcat) ?? "",
+        "rule": rule,
+        "from_zone": string(f.srcintf) ?? "",
+        "to_zone": string(f.dstintf) ?? "",
+        "dst_country": string(f.dstcountry) ?? "",
+        "dport": to_int(f.dstport) ?? 0,
+        "bytes_sent": to_int(f.sentbyte) ?? 0,
+        "bytes_received": to_int(f.rcvdbyte) ?? 0,
+        "elapsed": to_int(f.duration) ?? 0,
+        "vendor": "fortigate",
+        "device": string(f.devname) ?? ""
+      }
+
+sinks:
+  clickhouse_fortigate:
+    type: clickhouse
+    inputs: [fortigate_parse]
+    endpoint: http://clickhouse:8123
+    database: panos
+    table: traffic
+    skip_unknown_fields: true
+    auth:
+      strategy: basic
+      user: "${CLICKHOUSE_USER}"
+      password: "${CLICKHOUSE_PASSWORD}"
+    encoding:
+      timestamp_format: unix
+    batch:
+      max_events: 20000
+      timeout_secs: 5
+    buffer:
+      type: disk
+      max_size: 268435488   # 256 MB đệm trên đĩa nếu ClickHouse tạm ngưng (mức tối thiểu Vector cho phép)
+      when_full: drop_newest

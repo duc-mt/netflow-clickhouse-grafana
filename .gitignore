@@ -1,0 +1,28 @@
+# --- Bí mật & cấu hình cục bộ ---
+.env
+
+# --- Binary tải về khi deploy ---
+goflow2/goflow2
+goflow2/.version
+
+# --- Dữ liệu runtime ---
+clickhouse/data/
+clickhouse/user_files/*.csv
+clickhouse/user_files/*.tmp
+grafana/data/
+vector/data/
+
+# --- Công cụ kiểm thử tải về (tests/run_vector_tests.sh) ---
+.cache/
+
+# --- Rác thường gặp ---
+*.log
+*.bak
+*.orig
+*.swp
+*~
+.DS_Store
+
+# Python bytecode
+__pycache__/
+*.py[cod]

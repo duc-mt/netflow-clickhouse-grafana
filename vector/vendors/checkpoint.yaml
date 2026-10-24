@@ -1,0 +1,144 @@
+# Check Point - Log Exporter (format Syslog, RFC 5424) qua UDP 5516 -> panos.traffic
+#
+# *** BETA: chưa được kiểm chứng với log Check Point thật. ***
+# Parser dựa trên tài liệu Log Exporter và danh sách trường của Check Point; các bài test trong
+# vector/tests/checkpoint.test.yaml dùng log TỔNG HỢP. Hãy chạy README mục "Check Point" để thu
+# vài dòng log thật, đối chiếu rồi mới đưa vào vận hành.
+#
+# Dạng log (structured data của RFC 5424):
+#   <134>1 2026-10-23T03:15:00Z gw1 CheckPoint 2112 - [action:"Accept"; loguid:"{0x...}"; ...
+#     src:"10.1.1.10"; dst:"8.8.8.8"; s_port:"51234"; service:"443"; proto:"6"; bytes:"1234"; ...]
+#
+# Điều kiện giữ log: action=Accept và có số byte (cần bật Accounting ở rule, nếu không Check Point
+# không ghi byte và log sẽ bị bỏ vì không đo được lưu lượng).
+#
+# Check Point có thể xuất NHIỀU bản ghi cho cùng một kết nối (bản đầu, rồi các bản cập nhật có số
+# byte lũy kế, cùng loguid). Để không đếm trùng, bản ghi được gộp theo loguid (transform reduce),
+# lấy số byte lớn nhất, và chỉ phát ra khi loguid đó im lặng quá expire_after_ms.
+# Hệ quả: dữ liệu trễ khoảng expire_after_ms; kết nối dài có bản cập nhật thưa hơn khoảng này có
+# thể bị đếm hai lần. Chỉnh expire_after_ms theo thực tế sau khi thu log thật.
+
+sources:
+  checkpoint_syslog:
+    type: socket
+    mode: udp
+    address: 0.0.0.0:5516
+
+transforms:
+  checkpoint_parse:
+    type: remap
+    inputs: [checkpoint_syslog]
+    drop_on_error: true
+    drop_on_abort: true
+    reroute_dropped: false
+    source: |
+      # Lấy phần structured data trong [...] ở cuối bản tin
+      m, err = parse_regex(string!(.message), r'\[(?P<sd>[A-Za-z0-9_\-]+:".*)\]\s*$')
+      if err != null { abort }
+      f = parse_key_value!(m.sd, key_value_delimiter: ":", field_delimiter: ";", whitespace: "lenient")
+
+      # Chỉ giữ kết nối được cho phép (Accept); Drop/Reject/Encrypt... bỏ qua
+      action = downcase(string(f.action) ?? "")
+      if action != "accept" { abort }
+
+      # Số byte: ưu tiên sent_bytes/received_bytes, rồi client_outbound/inbound_bytes, cuối cùng là tổng "bytes".
+      # Dùng is_string() để biết trường CÓ tồn tại (to_int(null) trả về 0 nên không phân biệt được "thiếu" và "bằng 0").
+      sent = null
+      received = null
+      if is_string(f.sent_bytes) || is_string(f.received_bytes) {
+        sent = to_int(f.sent_bytes) ?? 0
+        received = to_int(f.received_bytes) ?? 0
+      } else if is_string(f.client_outbound_bytes) || is_string(f.client_inbound_bytes) {
+        sent = to_int(f.client_outbound_bytes) ?? 0
+        received = to_int(f.client_inbound_bytes) ?? 0
+      } else if is_string(f.bytes) {
+        sent = to_int(f.bytes) ?? 0
+        received = 0
+      }
+      # Không có số byte thì không đo được lưu lượng -> bỏ
+      if sent == null { abort }
+
+      # time: epoch giây hoặc mili-giây (Check Point có thể xuất cả hai)
+      t = to_int(f.time) ?? 0
+      ts = if t > 100000000000 {
+        from_unix_timestamp(t, unit: "milliseconds") ?? now()
+      } else if t > 0 {
+        from_unix_timestamp(t) ?? now()
+      } else {
+        now()
+      }
+
+      user = string(f.src_user_name) ?? ""
+      if user == "" { user = string(f.user) ?? "" }
+
+      app = string(f.appi_name) ?? ""
+      if app == "" { app = string(f.service_id) ?? "" }
+
+      rule = string(f.rule_name) ?? ""
+      if rule == "" { rule = string(f.rule) ?? "" }
+
+      loguid = string(f.loguid) ?? ""
+      if loguid == "" { loguid = uuid_v4() }
+
+      . = {
+        "loguid": loguid,
+        "ts": ts,
+        "src": string(f.src) ?? "",
+        "dst": string(f.dst) ?? "",
+        "src_user": user,
+        "app": app,
+        "category": string(f.app_category) ?? "",
+        "rule": rule,
+        "from_zone": string(f.inzone) ?? "",
+        "to_zone": string(f.outzone) ?? "",
+        "dst_country": string(f.dst_country) ?? "",
+        "dport": to_int(f.service) ?? 0,
+        "bytes_sent": sent || 0,
+        "bytes_received": received || 0,
+        "elapsed": to_int(f.elapsed) ?? 0,
+        "vendor": "checkpoint",
+        "device": string(f.origin) ?? ""
+      }
+
+  # Gộp các bản ghi cùng loguid: lấy số byte lớn nhất (giá trị lũy kế), thời điểm mới nhất.
+  checkpoint_dedupe:
+    type: reduce
+    inputs: [checkpoint_parse]
+    group_by: ["loguid"]
+    expire_after_ms: 60000
+    flush_period_ms: 5000
+    # Lưu ý: mặc định reduce CỘNG các trường số, nên phải khai báo rõ từng trường số (dport nếu để mặc định sẽ bị nhân đôi).
+    merge_strategies:
+      ts: retain
+      dport: discard
+      bytes_sent: max
+      bytes_received: max
+      elapsed: max
+
+  checkpoint_finalize:
+    type: remap
+    inputs: [checkpoint_dedupe]
+    source: |
+      del(.loguid)
+
+sinks:
+  clickhouse_checkpoint:
+    type: clickhouse
+    inputs: [checkpoint_finalize]
+    endpoint: http://clickhouse:8123
+    database: panos
+    table: traffic
+    skip_unknown_fields: true
+    auth:
+      strategy: basic
+      user: "${CLICKHOUSE_USER}"
+      password: "${CLICKHOUSE_PASSWORD}"
+    encoding:
+      timestamp_format: unix
+    batch:
+      max_events: 20000
+      timeout_secs: 5
+    buffer:
+      type: disk
+      max_size: 268435488   # 256 MB đệm trên đĩa nếu ClickHouse tạm ngưng (mức tối thiểu Vector cho phép)
+      when_full: drop_newest
